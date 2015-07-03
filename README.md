@@ -1,6 +1,11 @@
+
 Call Python 2.7 code in Go programs.  Function parameters are converted from Go
 to Python by value.  Returned Python object references are retained; they may
 be passed back to Python, or converted to Go values.
+
+
+Examples
+--------
 
 ```golang
 package main
@@ -34,5 +39,36 @@ func main() {
 
 	println(array[0].(int))
 	println(array[1].(float64))
+}
+```
+
+```golang
+package main
+
+import (
+	"github.com/tsavola/go-python"
+)
+
+func main() {
+	module, err := python.Import("turtle")
+	if err != nil {
+		panic(err)
+	}
+
+	screen, err := module.Call("Screen")
+	if err != nil {
+		panic(err)
+	}
+
+	turtle, err := module.Call("Turtle")
+	if err != nil {
+		panic(err)
+	}
+
+	turtle.Call("forward", 50)
+	turtle.Call("left", 90)
+	turtle.Call("foward", 30)
+
+	screen.Call("exitonclick")
 }
 ```

@@ -471,6 +471,11 @@ func getError() error {
 	return fmt.Errorf("Python: %s", stringify(pyValue))
 }
 
+var (
+	argv *C.char
+)
+
 func init() {
 	C.Py_InitializeEx(0)
+	C.PySys_SetArgvEx(0, &argv, 0)
 }
