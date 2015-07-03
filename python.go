@@ -84,11 +84,20 @@ import (
 
 // Object wraps a Python object.
 type Object interface {
-	// Get an attribute of an object.
-	Get(name string) (Object, error)
+	// Attr gets an attribute of an object.
+	Attr(name string) (Object, error)
 
-	// GetValue combines Get and Value methods.
-	GetValue(name string) (interface{}, error)
+	// AttrValue combines Attr and Value methods.
+	AttrValue(name string) (interface{}, error)
+
+	// Length of a sequence object.
+	Length() (int, error)
+
+	// Item gets an element of a sequence object.
+	Item(index int) (Object, error)
+
+	// ItemValue combines Item and Value methods.
+	ItemValue(index int) (interface{}, error)
 
 	// Invoke a callable object.
 	Invoke(args ...interface{}) (Object, error)
@@ -141,12 +150,35 @@ func Import(name string) (Object, error) {
 	return newObjectOrError(C.PyImport_ImportModule(cName))
 }
 
-func (o *object) Get(name string) (Object, error) {
-	return newObjectOrError(get(o.pyObject, name))
+func (o *object) Attr(name string) (Object, error) {
+	return newObjectOrError(getAttr(o.pyObject, name))
 }
 
-func (o *object) GetValue(name string) (value interface{}, err error) {
-	pyResult := get(o.pyObject, name)
+func (o *object) AttrValue(name string) (value interface{}, err error) {
+	pyResult := getAttr(o.pyObject, name)
+	if pyResult == nil {
+		err = getError()
+		return
+	}
+	defer C.DECREF(pyResult)
+
+	return translateFromPython(pyResult)
+}
+
+func (o *object) Length() (int, error) {
+	if size := C.PySequence_Size(o.pyObject); size >= 0 {
+		return int(size), nil
+	} else {
+		return 0, getError()
+	}
+}
+
+func (o *object) Item(i int) (Object, error) {
+	return newObjectOrError(C.PySequence_GetItem(o.pyObject, C.Py_ssize_t(i)))
+}
+
+func (o *object) ItemValue(i int) (value interface{}, err error) {
+	pyResult := C.PySequence_GetItem(o.pyObject, C.Py_ssize_t(i))
 	if pyResult == nil {
 		err = getError()
 		return
@@ -194,7 +226,7 @@ func (o *object) String() string {
 	return stringify(o.pyObject)
 }
 
-func get(pyObject *C.PyObject, name string) *C.PyObject {
+func getAttr(pyObject *C.PyObject, name string) *C.PyObject {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 
@@ -212,7 +244,7 @@ func invoke(pyObject *C.PyObject, args []interface{}) (pyResult *C.PyObject) {
 }
 
 func call(pyObject *C.PyObject, name string, args []interface{}) (pyResult *C.PyObject) {
-	pyMember := get(pyObject, name)
+	pyMember := getAttr(pyObject, name)
 	if pyMember == nil {
 		return
 	}

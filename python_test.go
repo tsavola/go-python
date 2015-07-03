@@ -11,7 +11,7 @@ func Test(t *testing.T) {
 	}
 	t.Logf("os = %v", module)
 
-	callable, err := module.Get("getpid")
+	callable, err := module.Attr("getpid")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestLoopback(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := list.CallValue("append", list)
+	result, err := list.CallValue("extend", []interface{}{list, list})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,6 +77,20 @@ func TestLoopback(t *testing.T) {
 	}
 
 	t.Logf("list = %v", list)
+
+	length, err := list.Length()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("len(list) = %v", length)
+
+	item, err := list.Item(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("list[1] = %v", item)
 }
 
 func TestNone(t *testing.T) {
