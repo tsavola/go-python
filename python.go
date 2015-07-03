@@ -1,3 +1,4 @@
+// Package python allows Go programs to access Python modules.
 package python
 
 /*
@@ -77,7 +78,7 @@ type Object interface {
 	// Get an attribute of an object.
 	Get(name string) (Object, error)
 
-	// GetValue combines Get and Value calls.
+	// GetValue combines Get and Value methods.
 	GetValue(name string) (interface{}, error)
 
 	// Invoke a callable object.
@@ -86,7 +87,7 @@ type Object interface {
 	// Call a member of an object.
 	Call(name string, args ...interface{}) (Object, error)
 
-	// CallValue combines Call and Value calls.
+	// CallValue combines Call and Value methods.
 	CallValue(name string, args ...interface{}) (interface{}, error)
 
 	// Value translates a Python object to a Go type (if possible).
