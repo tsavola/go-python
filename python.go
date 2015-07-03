@@ -20,6 +20,10 @@ static void DECREF(PyObject *o) {
 	Py_DECREF(o);
 }
 
+static void XDECREF(PyObject *o) {
+	Py_XDECREF(o);
+}
+
 static void Tuple_SET_ITEM(PyObject *p, Py_ssize_t pos, PyObject *o) {
 	PyTuple_SET_ITEM(p, pos, o);
 }
@@ -428,7 +432,7 @@ func translateFromPythonMapping(pyMapping *C.PyObject) (map[interface{}]interfac
 	return mapping, nil
 }
 
-func getError() (err error) {
+func getError() error {
 	var (
 		pyType  *C.PyObject
 		pyValue *C.PyObject
@@ -439,13 +443,11 @@ func getError() (err error) {
 
 	defer C.DECREF(pyType)
 	defer C.DECREF(pyValue)
-	defer C.DECREF(pyTrace)
-
-	err = fmt.Errorf("Python: %s", objectStr(pyValue))
+	defer C.XDECREF(pyTrace)
 
 	C.PyErr_Clear()
 
-	return
+	return fmt.Errorf("Python: %s", objectStr(pyValue))
 }
 
 func init() {
