@@ -119,6 +119,9 @@ type Object interface {
 	String() string
 }
 
+// object owns a single (Python) reference to the wrapped Python object until
+// garbage collected (by Go).  It must always be handled via pointer, never
+// copied by value.
 type object struct {
 	pyObject *C.PyObject
 }
@@ -127,13 +130,15 @@ func finalizeObject(o *object) {
 	C.DECREF(o.pyObject)
 }
 
+// newObject wraps a Python object.
 func newObject(pyObject *C.PyObject) Object {
 	o := &object{pyObject}
 	runtime.SetFinalizer(o, finalizeObject)
 	return o
 }
 
-func newObjectOrError(pyObject *C.PyObject) (o Object, err error) {
+// newObject wraps a Python object, unless it is NULL.
+func newObjectIfOk(pyObject *C.PyObject) (o Object, err error) {
 	if pyObject != nil {
 		o = newObject(pyObject)
 	} else {
@@ -147,15 +152,15 @@ func Import(name string) (Object, error) {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 
-	return newObjectOrError(C.PyImport_ImportModule(cName))
+	return newObjectIfOk(C.PyImport_ImportModule(cName))
 }
 
 func (o *object) Attr(name string) (Object, error) {
-	return newObjectOrError(getAttr(o.pyObject, name))
+	return newObjectIfOk(getAttr(o.pyObject, name))
 }
 
 func (o *object) AttrValue(name string) (interface{}, error) {
-	return translateFromPythonOrError(getAttr(o.pyObject, name))
+	return decodeIfOk(getAttr(o.pyObject, name))
 }
 
 func (o *object) Length() (int, error) {
@@ -167,31 +172,31 @@ func (o *object) Length() (int, error) {
 }
 
 func (o *object) Item(i int) (Object, error) {
-	return newObjectOrError(C.PySequence_GetItem(o.pyObject, C.Py_ssize_t(i)))
+	return newObjectIfOk(C.PySequence_GetItem(o.pyObject, C.Py_ssize_t(i)))
 }
 
 func (o *object) ItemValue(i int) (interface{}, error) {
-	return translateFromPythonOrError(C.PySequence_GetItem(o.pyObject, C.Py_ssize_t(i)))
+	return decodeIfOk(C.PySequence_GetItem(o.pyObject, C.Py_ssize_t(i)))
 }
 
 func (o *object) Invoke(args ...interface{}) (Object, error) {
-	return newObjectOrError(invoke(o.pyObject, args))
+	return newObjectIfOk(invoke(o.pyObject, args))
 }
 
 func (o *object) InvokeValue(args ...interface{}) (interface{}, error) {
-	return translateFromPythonOrError(invoke(o.pyObject, args))
+	return decodeIfOk(invoke(o.pyObject, args))
 }
 
 func (o *object) Call(name string, args ...interface{}) (Object, error) {
-	return newObjectOrError(call(o.pyObject, name, args))
+	return newObjectIfOk(call(o.pyObject, name, args))
 }
 
 func (o *object) CallValue(name string, args ...interface{}) (interface{}, error) {
-	return translateFromPythonOrError(call(o.pyObject, name, args))
+	return decodeIfOk(call(o.pyObject, name, args))
 }
 
 func (o *object) Value() (interface{}, error) {
-	return translateFromPython(o.pyObject)
+	return decode(o.pyObject)
 }
 
 func (o *object) String() string {
@@ -206,7 +211,7 @@ func getAttr(pyObject *C.PyObject, name string) *C.PyObject {
 }
 
 func invoke(pyObject *C.PyObject, args []interface{}) (pyResult *C.PyObject) {
-	pyArgs, err := translateToPythonTuple(args)
+	pyArgs, err := encodeTuple(args)
 	if err != nil {
 		return
 	}
@@ -238,7 +243,9 @@ func stringify(pyObject *C.PyObject) (s string) {
 	return
 }
 
-func translateToPython(x interface{}) (pyValue *C.PyObject, err error) {
+// encode translates a Go value (or a wrapped Python object) to a Python
+// object.
+func encode(x interface{}) (pyValue *C.PyObject, err error) {
 	if x == nil {
 		pyValue = C.NoneRef()
 		return
@@ -304,10 +311,10 @@ func translateToPython(x interface{}) (pyValue *C.PyObject, err error) {
 		pyValue = C.Long_FromUint64(C.uint64_t(value))
 
 	case []interface{}:
-		return translateToPythonTuple(value)
+		return encodeTuple(value)
 
 	case map[interface{}]interface{}:
-		return translateToPythonDict(value)
+		return encodeDict(value)
 
 	case *object:
 		C.INCREF(value.pyObject)
@@ -324,11 +331,12 @@ func translateToPython(x interface{}) (pyValue *C.PyObject, err error) {
 	return
 }
 
-func translateToPythonTuple(array []interface{}) (*C.PyObject, error) {
+// encodeTuple translates a Go array to a Python object.
+func encodeTuple(array []interface{}) (*C.PyObject, error) {
 	pyTuple := C.PyTuple_New(C.Py_ssize_t(len(array)))
 
 	for i, item := range array {
-		pyItem, err := translateToPython(item)
+		pyItem, err := encode(item)
 		if err != nil {
 			C.DECREF(pyTuple)
 			return nil, err
@@ -340,17 +348,18 @@ func translateToPythonTuple(array []interface{}) (*C.PyObject, error) {
 	return pyTuple, nil
 }
 
-func translateToPythonDict(m map[interface{}]interface{}) (*C.PyObject, error) {
+// encodeDict translates a Go map to a Python object.
+func encodeDict(m map[interface{}]interface{}) (*C.PyObject, error) {
 	pyDict := C.PyDict_New()
 
 	for key, value := range m {
-		pyKey, err := translateToPython(key)
+		pyKey, err := encode(key)
 		if err != nil {
 			C.DECREF(pyDict)
 			return nil, err
 		}
 
-		pyValue, err := translateToPython(value)
+		pyValue, err := encode(value)
 		if err != nil {
 			C.DECREF(pyKey)
 			C.DECREF(pyDict)
@@ -371,16 +380,8 @@ func translateToPythonDict(m map[interface{}]interface{}) (*C.PyObject, error) {
 	return pyDict, nil
 }
 
-func translateFromPythonOrError(pyObject *C.PyObject) (interface{}, error) {
-	if pyObject != nil {
-		defer C.DECREF(pyObject)
-		return translateFromPython(pyObject)
-	} else {
-		return nil, getError()
-	}
-}
-
-func translateFromPython(pyValue *C.PyObject) (value interface{}, err error) {
+// decode translates a Python object to a Go value.
+func decode(pyValue *C.PyObject) (value interface{}, err error) {
 	if C.None_Check(pyValue) {
 		value = nil
 
@@ -403,10 +404,10 @@ func translateFromPython(pyValue *C.PyObject) (value interface{}, err error) {
 		value = C.GoString(C.PyString_AsString(pyValue))
 
 	} else if C.PySequence_Check(pyValue) != 0 {
-		return translateFromPythonSequence(pyValue)
+		return decodeSequence(pyValue)
 
 	} else if C.PyMapping_Check(pyValue) != 0 {
-		return translateFromPythonMapping(pyValue)
+		return decodeMapping(pyValue)
 
 	} else {
 		err = fmt.Errorf("unable to translate %s from python", stringify(C.PyObject_Type(pyValue)))
@@ -416,7 +417,19 @@ func translateFromPython(pyValue *C.PyObject) (value interface{}, err error) {
 	return
 }
 
-func translateFromPythonSequence(pySequence *C.PyObject) ([]interface{}, error) {
+// decodeIfOk translates a Python object to a Go value, unless it is NULL.  The
+// reference is stolen.
+func decodeIfOk(pyObject *C.PyObject) (interface{}, error) {
+	if pyObject != nil {
+		defer C.DECREF(pyObject)
+		return decode(pyObject)
+	} else {
+		return nil, getError()
+	}
+}
+
+// decodeSequence translates a Python object to a Go array.
+func decodeSequence(pySequence *C.PyObject) ([]interface{}, error) {
 	length := int(C.PySequence_Size(pySequence))
 	array := make([]interface{}, length)
 
@@ -426,7 +439,7 @@ func translateFromPythonSequence(pySequence *C.PyObject) ([]interface{}, error) 
 			return nil, getError()
 		}
 
-		value, err := translateFromPython(pyValue)
+		value, err := decode(pyValue)
 		if err != nil {
 			return nil, err
 		}
@@ -437,7 +450,8 @@ func translateFromPythonSequence(pySequence *C.PyObject) ([]interface{}, error) 
 	return array, nil
 }
 
-func translateFromPythonMapping(pyMapping *C.PyObject) (map[interface{}]interface{}, error) {
+// decodeMapping translates a Python object to a Go map.
+func decodeMapping(pyMapping *C.PyObject) (map[interface{}]interface{}, error) {
 	mapping := make(map[interface{}]interface{})
 
 	pyItems := C.Mapping_Items(pyMapping)
@@ -450,12 +464,12 @@ func translateFromPythonMapping(pyMapping *C.PyObject) (map[interface{}]interfac
 	for i := 0; i < length; i++ {
 		pyPair := C.PyList_GetItem(pyItems, C.Py_ssize_t(i))
 
-		key, err := translateFromPython(C.PyTuple_GetItem(pyPair, 0))
+		key, err := decode(C.PyTuple_GetItem(pyPair, 0))
 		if err != nil {
 			return nil, err
 		}
 
-		value, err := translateFromPython(C.PyTuple_GetItem(pyPair, 1))
+		value, err := decode(C.PyTuple_GetItem(pyPair, 1))
 		if err != nil {
 			return nil, err
 		}
@@ -466,6 +480,8 @@ func translateFromPythonMapping(pyMapping *C.PyObject) (map[interface{}]interfac
 	return mapping, nil
 }
 
+// getError translates the current Python exception to a Go error, and clears
+// the Python exception state.
 func getError() error {
 	var (
 		pyType  *C.PyObject
