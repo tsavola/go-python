@@ -24,6 +24,11 @@ static void Tuple_SET_ITEM(PyObject *p, Py_ssize_t pos, PyObject *o) {
 	PyTuple_SET_ITEM(p, pos, o);
 }
 
+static PyObject *NoneRef() {
+	Py_INCREF(Py_None);
+	return Py_None;
+}
+
 static PyObject *Long_FromInt64(int64_t v) {
 	return PyLong_FromLongLong(v);
 }
@@ -205,6 +210,11 @@ func objectStr(pyObject *C.PyObject) (s string) {
 }
 
 func translateToPython(x interface{}) (pyValue *C.PyObject, err error) {
+	if x == nil {
+		pyValue = C.NoneRef()
+		return
+	}
+
 	switch value := x.(type) {
 	case bool:
 		var i C.long

@@ -78,3 +78,39 @@ func TestLoopback(t *testing.T) {
 
 	t.Logf("list = %v", list)
 }
+
+func TestNone(t *testing.T) {
+	module, err := Import("__builtin__")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	list, err := module.Call("list", []interface{}{nil})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := list.CallValue("pop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != nil {
+		t.Fail()
+	}
+
+	result, err = list.CallValue("append", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != nil {
+		t.Fail()
+	}
+
+	result, err = list.CallValue("pop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != nil {
+		t.Fail()
+	}
+}
