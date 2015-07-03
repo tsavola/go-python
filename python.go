@@ -154,15 +154,8 @@ func (o *object) Attr(name string) (Object, error) {
 	return newObjectOrError(getAttr(o.pyObject, name))
 }
 
-func (o *object) AttrValue(name string) (value interface{}, err error) {
-	pyResult := getAttr(o.pyObject, name)
-	if pyResult == nil {
-		err = getError()
-		return
-	}
-	defer C.DECREF(pyResult)
-
-	return translateFromPython(pyResult)
+func (o *object) AttrValue(name string) (interface{}, error) {
+	return translateFromPythonOrError(getAttr(o.pyObject, name))
 }
 
 func (o *object) Length() (int, error) {
@@ -177,45 +170,24 @@ func (o *object) Item(i int) (Object, error) {
 	return newObjectOrError(C.PySequence_GetItem(o.pyObject, C.Py_ssize_t(i)))
 }
 
-func (o *object) ItemValue(i int) (value interface{}, err error) {
-	pyResult := C.PySequence_GetItem(o.pyObject, C.Py_ssize_t(i))
-	if pyResult == nil {
-		err = getError()
-		return
-	}
-	defer C.DECREF(pyResult)
-
-	return translateFromPython(pyResult)
+func (o *object) ItemValue(i int) (interface{}, error) {
+	return translateFromPythonOrError(C.PySequence_GetItem(o.pyObject, C.Py_ssize_t(i)))
 }
 
 func (o *object) Invoke(args ...interface{}) (Object, error) {
 	return newObjectOrError(invoke(o.pyObject, args))
 }
 
-func (o *object) InvokeValue(args ...interface{}) (value interface{}, err error) {
-	pyResult := invoke(o.pyObject, args)
-	if pyResult == nil {
-		err = getError()
-		return
-	}
-	defer C.DECREF(pyResult)
-
-	return translateFromPython(pyResult)
+func (o *object) InvokeValue(args ...interface{}) (interface{}, error) {
+	return translateFromPythonOrError(invoke(o.pyObject, args))
 }
 
 func (o *object) Call(name string, args ...interface{}) (Object, error) {
 	return newObjectOrError(call(o.pyObject, name, args))
 }
 
-func (o *object) CallValue(name string, args ...interface{}) (value interface{}, err error) {
-	pyResult := call(o.pyObject, name, args)
-	if pyResult == nil {
-		err = getError()
-		return
-	}
-	defer C.DECREF(pyResult)
-
-	return translateFromPython(pyResult)
+func (o *object) CallValue(name string, args ...interface{}) (interface{}, error) {
+	return translateFromPythonOrError(call(o.pyObject, name, args))
 }
 
 func (o *object) Value() (interface{}, error) {
@@ -397,6 +369,15 @@ func translateToPythonDict(m map[interface{}]interface{}) (*C.PyObject, error) {
 	}
 
 	return pyDict, nil
+}
+
+func translateFromPythonOrError(pyObject *C.PyObject) (interface{}, error) {
+	if pyObject != nil {
+		defer C.DECREF(pyObject)
+		return translateFromPython(pyObject)
+	} else {
+		return nil, getError()
+	}
 }
 
 func translateFromPython(pyValue *C.PyObject) (value interface{}, err error) {
