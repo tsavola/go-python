@@ -93,6 +93,9 @@ type Object interface {
 	// Invoke a callable object.
 	Invoke(args ...interface{}) (Object, error)
 
+	// InvokeValue combines Invoke and Value methods.
+	InvokeValue(args ...interface{}) (interface{}, error)
+
 	// Call a member of an object.
 	Call(name string, args ...interface{}) (Object, error)
 
@@ -172,6 +175,15 @@ func invokeObject(pyObject *C.PyObject, args []interface{}) (result Object, err 
 	return newObjectOrError(C.PyObject_CallObject(pyObject, pyArgs))
 }
 
+func (o *object) InvokeValue(args ...interface{}) (value interface{}, err error) {
+	result, err := o.Invoke(args...)
+	if err != nil {
+		return
+	}
+
+	return result.Value()
+}
+
 func (o *object) Call(name string, args ...interface{}) (result Object, err error) {
 	pyMember := o.get(name)
 	if pyMember == nil {
@@ -192,7 +204,7 @@ func (o *object) CallValue(name string, args ...interface{}) (value interface{},
 	return result.Value()
 }
 
-func (o *object) Value() (value interface{}, err error) {
+func (o *object) Value() (interface{}, error) {
 	return translateFromPython(o.pyObject)
 }
 
