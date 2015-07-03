@@ -142,66 +142,48 @@ func Import(name string) (Object, error) {
 }
 
 func (o *object) Get(name string) (Object, error) {
-	return newObjectOrError(o.get(name))
-}
-
-func (o *object) get(name string) *C.PyObject {
-	cName := C.CString(name)
-	defer C.free(unsafe.Pointer(cName))
-
-	return C.PyObject_GetAttrString(o.pyObject, cName)
+	return newObjectOrError(get(o.pyObject, name))
 }
 
 func (o *object) GetValue(name string) (value interface{}, err error) {
-	result, err := o.Get(name)
-	if err != nil {
-		return
-	}
-
-	return result.Value()
-}
-
-func (o *object) Invoke(args ...interface{}) (Object, error) {
-	return invokeObject(o.pyObject, args)
-}
-
-func invokeObject(pyObject *C.PyObject, args []interface{}) (result Object, err error) {
-	pyArgs, err := translateToPythonTuple(args)
-	if err != nil {
-		return
-	}
-	defer C.DECREF(pyArgs)
-
-	return newObjectOrError(C.PyObject_CallObject(pyObject, pyArgs))
-}
-
-func (o *object) InvokeValue(args ...interface{}) (value interface{}, err error) {
-	result, err := o.Invoke(args...)
-	if err != nil {
-		return
-	}
-
-	return result.Value()
-}
-
-func (o *object) Call(name string, args ...interface{}) (result Object, err error) {
-	pyMember := o.get(name)
-	if pyMember == nil {
+	pyResult := get(o.pyObject, name)
+	if pyResult == nil {
 		err = getError()
 		return
 	}
-	defer C.DECREF(pyMember)
+	defer C.DECREF(pyResult)
 
-	return invokeObject(pyMember, args)
+	return translateFromPython(pyResult)
+}
+
+func (o *object) Invoke(args ...interface{}) (Object, error) {
+	return newObjectOrError(invoke(o.pyObject, args))
+}
+
+func (o *object) InvokeValue(args ...interface{}) (value interface{}, err error) {
+	pyResult := invoke(o.pyObject, args)
+	if pyResult == nil {
+		err = getError()
+		return
+	}
+	defer C.DECREF(pyResult)
+
+	return translateFromPython(pyResult)
+}
+
+func (o *object) Call(name string, args ...interface{}) (Object, error) {
+	return newObjectOrError(call(o.pyObject, name, args))
 }
 
 func (o *object) CallValue(name string, args ...interface{}) (value interface{}, err error) {
-	result, err := o.Call(name, args...)
-	if err != nil {
+	pyResult := call(o.pyObject, name, args)
+	if pyResult == nil {
+		err = getError()
 		return
 	}
+	defer C.DECREF(pyResult)
 
-	return result.Value()
+	return translateFromPython(pyResult)
 }
 
 func (o *object) Value() (interface{}, error) {
@@ -209,10 +191,37 @@ func (o *object) Value() (interface{}, error) {
 }
 
 func (o *object) String() string {
-	return objectStr(o.pyObject)
+	return stringify(o.pyObject)
 }
 
-func objectStr(pyObject *C.PyObject) (s string) {
+func get(pyObject *C.PyObject, name string) *C.PyObject {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+
+	return C.PyObject_GetAttrString(pyObject, cName)
+}
+
+func invoke(pyObject *C.PyObject, args []interface{}) (pyResult *C.PyObject) {
+	pyArgs, err := translateToPythonTuple(args)
+	if err != nil {
+		return
+	}
+	defer C.DECREF(pyArgs)
+
+	return C.PyObject_CallObject(pyObject, pyArgs)
+}
+
+func call(pyObject *C.PyObject, name string, args []interface{}) (pyResult *C.PyObject) {
+	pyMember := get(pyObject, name)
+	if pyMember == nil {
+		return
+	}
+	defer C.DECREF(pyMember)
+
+	return invoke(pyMember, args)
+}
+
+func stringify(pyObject *C.PyObject) (s string) {
 	if pyResult := C.PyObject_Str(pyObject); pyResult != nil {
 		defer C.DECREF(pyResult)
 
@@ -387,7 +396,7 @@ func translateFromPython(pyValue *C.PyObject) (value interface{}, err error) {
 		return translateFromPythonMapping(pyValue)
 
 	} else {
-		err = fmt.Errorf("unable to translate %s from python", objectStr(C.PyObject_Type(pyValue)))
+		err = fmt.Errorf("unable to translate %s from python", stringify(C.PyObject_Type(pyValue)))
 		return
 	}
 
@@ -459,7 +468,7 @@ func getError() error {
 
 	C.PyErr_Clear()
 
-	return fmt.Errorf("Python: %s", objectStr(pyValue))
+	return fmt.Errorf("Python: %s", stringify(pyValue))
 }
 
 func init() {
