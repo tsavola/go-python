@@ -74,12 +74,26 @@ import (
 
 // Object wraps a Python object.
 type Object interface {
+	// Get an attribute of an object.
 	Get(name string) (Object, error)
+
+	// GetValue combines Get and Value calls.
 	GetValue(name string) (interface{}, error)
+
+	// Invoke a callable object.
 	Invoke(args ...interface{}) (Object, error)
+
+	// Call a member of an object.
 	Call(name string, args ...interface{}) (Object, error)
+
+	// CallValue combines Call and Value calls.
 	CallValue(name string, args ...interface{}) (interface{}, error)
+
+	// Value translates a Python object to a Go type (if possible).
 	Value() (interface{}, error)
+
+	// String representation of an object.  The result is an arbitrary value on
+	// error.
 	String() string
 }
 
@@ -114,7 +128,6 @@ func Import(name string) (Object, error) {
 	return newObjectOrError(C.PyImport_ImportModule(cName))
 }
 
-// Get an attribute of an object.
 func (o *object) Get(name string) (Object, error) {
 	return newObjectOrError(o.get(name))
 }
@@ -126,7 +139,6 @@ func (o *object) get(name string) *C.PyObject {
 	return C.PyObject_GetAttrString(o.pyObject, cName)
 }
 
-// GetValue combines Get and Value calls.
 func (o *object) GetValue(name string) (value interface{}, err error) {
 	result, err := o.Get(name)
 	if err != nil {
@@ -136,7 +148,6 @@ func (o *object) GetValue(name string) (value interface{}, err error) {
 	return result.Value()
 }
 
-// Invoke a callable object.
 func (o *object) Invoke(args ...interface{}) (Object, error) {
 	return invokeObject(o.pyObject, args)
 }
@@ -151,7 +162,6 @@ func invokeObject(pyObject *C.PyObject, args []interface{}) (result Object, err 
 	return newObjectOrError(C.PyObject_CallObject(pyObject, pyArgs))
 }
 
-// Call a member of an object.
 func (o *object) Call(name string, args ...interface{}) (result Object, err error) {
 	pyMember := o.get(name)
 	if pyMember == nil {
@@ -163,7 +173,6 @@ func (o *object) Call(name string, args ...interface{}) (result Object, err erro
 	return invokeObject(pyMember, args)
 }
 
-// CallValue combines Call and Value calls.
 func (o *object) CallValue(name string, args ...interface{}) (value interface{}, err error) {
 	result, err := o.Call(name, args...)
 	if err != nil {
@@ -173,13 +182,10 @@ func (o *object) CallValue(name string, args ...interface{}) (value interface{},
 	return result.Value()
 }
 
-// Value translates a Python object to a Go type (if possible).
 func (o *object) Value() (value interface{}, err error) {
 	return translateFromPython(o.pyObject)
 }
 
-// String representation of an object.  The result is an arbitrary value on
-// error.
 func (o *object) String() string {
 	return objectStr(o.pyObject)
 }
@@ -411,7 +417,6 @@ func translateFromPythonMapping(pyMapping *C.PyObject) (map[interface{}]interfac
 	return mapping, nil
 }
 
-// TODO: getError fetches and clears Python exception.
 func getError() (err error) {
 	var (
 		pyType  *C.PyObject
