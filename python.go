@@ -152,18 +152,26 @@ func Import(name string) (Object, error) {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 
+	defer C.PyGILState_Release(C.PyGILState_Ensure())
+
 	return newObjectIfOk(C.PyImport_ImportModule(cName))
 }
 
 func (o *object) Attr(name string) (Object, error) {
+	defer C.PyGILState_Release(C.PyGILState_Ensure())
+
 	return newObjectIfOk(getAttr(o.pyObject, name))
 }
 
 func (o *object) AttrValue(name string) (interface{}, error) {
+	defer C.PyGILState_Release(C.PyGILState_Ensure())
+
 	return decodeIfOk(getAttr(o.pyObject, name))
 }
 
 func (o *object) Length() (int, error) {
+	defer C.PyGILState_Release(C.PyGILState_Ensure())
+
 	if size := C.PySequence_Size(o.pyObject); size >= 0 {
 		return int(size), nil
 	} else {
@@ -172,34 +180,50 @@ func (o *object) Length() (int, error) {
 }
 
 func (o *object) Item(i int) (Object, error) {
+	defer C.PyGILState_Release(C.PyGILState_Ensure())
+
 	return newObjectIfOk(C.PySequence_GetItem(o.pyObject, C.Py_ssize_t(i)))
 }
 
 func (o *object) ItemValue(i int) (interface{}, error) {
+	defer C.PyGILState_Release(C.PyGILState_Ensure())
+
 	return decodeIfOk(C.PySequence_GetItem(o.pyObject, C.Py_ssize_t(i)))
 }
 
 func (o *object) Invoke(args ...interface{}) (Object, error) {
+	defer C.PyGILState_Release(C.PyGILState_Ensure())
+
 	return newObjectIfOk(invoke(o.pyObject, args))
 }
 
 func (o *object) InvokeValue(args ...interface{}) (interface{}, error) {
+	defer C.PyGILState_Release(C.PyGILState_Ensure())
+
 	return decodeIfOk(invoke(o.pyObject, args))
 }
 
 func (o *object) Call(name string, args ...interface{}) (Object, error) {
+	defer C.PyGILState_Release(C.PyGILState_Ensure())
+
 	return newObjectIfOk(call(o.pyObject, name, args))
 }
 
 func (o *object) CallValue(name string, args ...interface{}) (interface{}, error) {
+	defer C.PyGILState_Release(C.PyGILState_Ensure())
+
 	return decodeIfOk(call(o.pyObject, name, args))
 }
 
 func (o *object) Value() (interface{}, error) {
+	defer C.PyGILState_Release(C.PyGILState_Ensure())
+
 	return decode(o.pyObject)
 }
 
 func (o *object) String() string {
+	defer C.PyGILState_Release(C.PyGILState_Ensure())
+
 	return stringify(o.pyObject)
 }
 
