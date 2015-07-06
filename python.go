@@ -82,6 +82,65 @@ import (
 	"unsafe"
 )
 
+type work struct {
+	f func()
+	r chan interface{}
+}
+
+var (
+	pyArgv *C.char
+	workQueue = make(chan *work)
+)
+
+func init() {
+	go executeLoop()
+}
+
+func executeLoop() {
+	runtime.LockOSThread()
+
+	C.PyEval_InitThreads()
+	C.Py_InitializeEx(0)
+	C.PySys_SetArgvEx(0, &pyArgv, 0)
+
+	gilState := C.PyGILState_Ensure()
+	defer C.PyGILState_Release(gilState)
+
+	threadState := C.PyEval_SaveThread()
+
+	for w := range workQueue {
+		executeWork(w, &threadState)
+	}
+}
+
+func executeWork(w *work, threadState **C.PyThreadState) {
+	defer func() {
+		w.r <- recover()
+	}()
+
+	C.PyEval_RestoreThread(*threadState)
+
+	defer func() {
+		*threadState = C.PyEval_SaveThread()
+	}()
+
+	w.f()
+}
+
+// execute Python code.
+func execute(f func()) {
+	w := &work{
+		f: f,
+		r: make(chan interface{}),
+	}
+
+	workQueue <- w
+
+	if v := <-w.r; v != nil {
+		panic(v)
+	}
+}
+
 // Object wraps a Python object.
 type Object interface {
 	// Attr gets an attribute of an object.
@@ -127,7 +186,9 @@ type object struct {
 }
 
 func finalizeObject(o *object) {
-	C.DECREF(o.pyObject)
+	execute(func() {
+		C.DECREF(o.pyObject)
+	})
 }
 
 // newObject wraps a Python object.
@@ -148,83 +209,96 @@ func newObjectIfOk(pyObject *C.PyObject) (o Object, err error) {
 }
 
 // Import a Python module.
-func Import(name string) (Object, error) {
+func Import(name string) (module Object, err error) {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 
-	defer C.PyGILState_Release(C.PyGILState_Ensure())
-
-	return newObjectIfOk(C.PyImport_ImportModule(cName))
+	execute(func() {
+		module, err = newObjectIfOk(C.PyImport_ImportModule(cName))
+	})
+	return
 }
 
-func (o *object) Attr(name string) (Object, error) {
-	defer C.PyGILState_Release(C.PyGILState_Ensure())
-
-	return newObjectIfOk(getAttr(o.pyObject, name))
+func (o *object) Attr(name string) (attr Object, err error) {
+	execute(func() {
+		attr, err = newObjectIfOk(getAttr(o.pyObject, name))
+	})
+	return
 }
 
-func (o *object) AttrValue(name string) (interface{}, error) {
-	defer C.PyGILState_Release(C.PyGILState_Ensure())
-
-	return decodeIfOk(getAttr(o.pyObject, name))
+func (o *object) AttrValue(name string) (attr interface{}, err error) {
+	execute(func() {
+		attr, err = decodeIfOk(getAttr(o.pyObject, name))
+	})
+	return
 }
 
-func (o *object) Length() (int, error) {
-	defer C.PyGILState_Release(C.PyGILState_Ensure())
-
-	if size := C.PySequence_Size(o.pyObject); size >= 0 {
-		return int(size), nil
-	} else {
-		return 0, getError()
-	}
+func (o *object) Length() (l int, err error) {
+	execute(func() {
+		if size := C.PySequence_Size(o.pyObject); size >= 0 {
+			l = int(size)
+		} else {
+			err = getError()
+		}
+		return
+	})
+	return
 }
 
-func (o *object) Item(i int) (Object, error) {
-	defer C.PyGILState_Release(C.PyGILState_Ensure())
-
-	return newObjectIfOk(C.PySequence_GetItem(o.pyObject, C.Py_ssize_t(i)))
+func (o *object) Item(i int) (item Object, err error) {
+	execute(func() {
+		item, err = newObjectIfOk(C.PySequence_GetItem(o.pyObject, C.Py_ssize_t(i)))
+	})
+	return
 }
 
-func (o *object) ItemValue(i int) (interface{}, error) {
-	defer C.PyGILState_Release(C.PyGILState_Ensure())
-
-	return decodeIfOk(C.PySequence_GetItem(o.pyObject, C.Py_ssize_t(i)))
+func (o *object) ItemValue(i int) (item interface{}, err error) {
+	execute(func() {
+		item, err = decodeIfOk(C.PySequence_GetItem(o.pyObject, C.Py_ssize_t(i)))
+	})
+	return
 }
 
-func (o *object) Invoke(args ...interface{}) (Object, error) {
-	defer C.PyGILState_Release(C.PyGILState_Ensure())
-
-	return newObjectIfOk(invoke(o.pyObject, args))
+func (o *object) Invoke(args ...interface{}) (result Object, err error) {
+	execute(func() {
+		result, err = newObjectIfOk(invoke(o.pyObject, args))
+	})
+	return
 }
 
-func (o *object) InvokeValue(args ...interface{}) (interface{}, error) {
-	defer C.PyGILState_Release(C.PyGILState_Ensure())
-
-	return decodeIfOk(invoke(o.pyObject, args))
+func (o *object) InvokeValue(args ...interface{}) (result interface{}, err error) {
+	execute(func() {
+		result, err = decodeIfOk(invoke(o.pyObject, args))
+	})
+	return
 }
 
-func (o *object) Call(name string, args ...interface{}) (Object, error) {
-	defer C.PyGILState_Release(C.PyGILState_Ensure())
-
-	return newObjectIfOk(call(o.pyObject, name, args))
+func (o *object) Call(name string, args ...interface{}) (result Object, err error) {
+	execute(func() {
+		result, err = newObjectIfOk(call(o.pyObject, name, args))
+	})
+	return
 }
 
-func (o *object) CallValue(name string, args ...interface{}) (interface{}, error) {
-	defer C.PyGILState_Release(C.PyGILState_Ensure())
-
-	return decodeIfOk(call(o.pyObject, name, args))
+func (o *object) CallValue(name string, args ...interface{}) (result interface{}, err error) {
+	execute(func() {
+		result, err = decodeIfOk(call(o.pyObject, name, args))
+	})
+	return
 }
 
-func (o *object) Value() (interface{}, error) {
-	defer C.PyGILState_Release(C.PyGILState_Ensure())
-
-	return decode(o.pyObject)
+func (o *object) Value() (v interface{}, err error) {
+	execute(func() {
+		v, err = decode(o.pyObject)
+	})
+	return
 }
 
-func (o *object) String() string {
-	defer C.PyGILState_Release(C.PyGILState_Ensure())
-
-	return stringify(o.pyObject)
+func (o *object) String() (s string) {
+	execute(func() {
+		s = stringify(o.pyObject)
+	})
+	return
 }
 
 func getAttr(pyObject *C.PyObject, name string) *C.PyObject {
@@ -522,13 +596,4 @@ func getError() error {
 	C.PyErr_Clear()
 
 	return fmt.Errorf("Python: %s", stringify(pyValue))
-}
-
-var (
-	argv *C.char
-)
-
-func init() {
-	C.Py_InitializeEx(0)
-	C.PySys_SetArgvEx(0, &argv, 0)
 }
