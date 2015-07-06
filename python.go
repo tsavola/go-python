@@ -117,7 +117,6 @@ var (
 
 	initLock     sync.Mutex
 	initialized  bool
-	pyArgv       *C.char
 	pyEmptyTuple *C.PyObject
 	falseObject  *object
 	trueObject   *object
@@ -134,7 +133,7 @@ func threadInit() (defaultThreadState *C.PyThreadState) {
 	if !initialized {
 		C.Py_InitializeEx(0)
 		C.PyEval_InitThreads()
-		C.PySys_SetArgvEx(0, &pyArgv, 0)
+		C.PySys_SetArgvEx(0, nil, 0)
 
 		pyEmptyTuple = C.PyTuple_New(0)
 		falseObject = &object{C.False_INCREF()}
