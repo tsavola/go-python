@@ -128,3 +128,22 @@ func TestNone(t *testing.T) {
 		t.Fail()
 	}
 }
+
+func TestLong(t *testing.T) {
+	module, err := Import("__builtin__")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pyLong, err := module.Call("long", "0xfffffffffffffffe", 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	iface, err := pyLong.Value()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Log(iface.(uint64))
+}

@@ -548,7 +548,7 @@ func encode(x interface{}) (pyValue *C.PyObject, err error) {
 		C.INCREF(pyValue)
 
 	default:
-		err = fmt.Errorf("unable to translate %t to python", x)
+		err = fmt.Errorf("unable to translate %t to Python", x)
 		return
 	}
 
@@ -664,7 +664,25 @@ func decodeType(pyType C.int, pyValue *C.PyObject) (value interface{}, err error
 		value = int(C.PyInt_AsLong(pyValue))
 
 	case 6:
-		panic("Python long type decoding not implemented")
+		var overflow C.int
+		i := int64(C.PyLong_AsLongLongAndOverflow(pyValue, &overflow))
+
+		switch overflow {
+		case -1:
+			err = fmt.Errorf("Python integer %s is too small", stringify(pyValue))
+
+		case 0:
+			value = i
+
+		case 1:
+			n := uint64(C.PyLong_AsUnsignedLongLong(pyValue))
+			if n == 0xffffffffffffffff {
+				C.PyErr_Clear()
+				err = fmt.Errorf("Python integer %s is too large", stringify(pyValue))
+			} else {
+				value = n
+			}
+		}
 
 	case 7:
 		value = float64(C.PyFloat_AsDouble(pyValue))
@@ -679,7 +697,7 @@ func decodeType(pyType C.int, pyValue *C.PyObject) (value interface{}, err error
 		return decodeMapping(pyValue)
 
 	default:
-		err = fmt.Errorf("unable to translate %s from python", stringify(C.PyObject_Type(pyValue)))
+		err = fmt.Errorf("unable to translate %s from Python", stringify(C.PyObject_Type(pyValue)))
 		return
 	}
 
