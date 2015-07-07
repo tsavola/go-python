@@ -233,7 +233,7 @@ func newObject(pyObject *C.PyObject) (o Object) {
 // newObjectType wraps a Python object, unless it is None.  Might or might not
 // steal the Python reference, depending on the type...
 func newObjectType(pyType C.int, pyObject *C.PyObject) (o Object, err error) {
-	switch int(pyType) {
+	switch pyType {
 	case 1:
 		// nil
 
@@ -685,7 +685,7 @@ func decode(pyValue *C.PyObject) (interface{}, error) {
 // decodeType translates a Python object to a Go value.  Its type must be
 // non-zero.
 func decodeType(pyType C.int, pyValue *C.PyObject) (value interface{}, err error) {
-	switch int(pyType) {
+	switch pyType {
 	case 0:
 		err = getError()
 
