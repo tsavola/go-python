@@ -222,16 +222,18 @@ type object struct {
 
 // newObject wraps a Python object.
 func newObject(pyObject *C.PyObject) (o Object) {
-	o, _ = newObjectType(C.getType(pyObject), pyObject)
+	t := C.getType(pyObject)
+	o, _ = newObjectType(t, pyObject)
+	if t > 3 {
+		C.INCREF(pyObject)
+	}
 	return
 }
 
-// newObjectType wraps a Python object, unless it is None.
+// newObjectType wraps a Python object, unless it is None.  Might or might not
+// steal the Python reference, depending on the type...
 func newObjectType(pyType C.int, pyObject *C.PyObject) (o Object, err error) {
 	switch int(pyType) {
-	case 0:
-		err = getError()
-
 	case 1:
 		// nil
 
@@ -243,7 +245,6 @@ func newObjectType(pyType C.int, pyObject *C.PyObject) (o Object, err error) {
 
 	default:
 		o = &object{pyObject}
-		C.INCREF(pyObject)
 		runtime.SetFinalizer(o, finalizeObject)
 	}
 
@@ -396,7 +397,6 @@ func (o *object) Invoke(args ...interface{}) (result Object, err error) {
 		if err != nil {
 			return
 		}
-		defer xDECREF(pyResult)
 
 		result, err = newObjectType(pyType, pyResult)
 	})
@@ -432,7 +432,6 @@ func (o *object) Call(name string, args ...interface{}) (result Object, err erro
 		if err != nil {
 			return
 		}
-		defer xDECREF(pyResult)
 
 		result, err = newObjectType(pyType, pyResult)
 	})
