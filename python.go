@@ -9,8 +9,11 @@ package python
 #include <Python.h>
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+
+PyObject *String_FromGoStringPtr(void *);
 
 static void INCREF(PyObject *o) {
 	Py_INCREF(o);
@@ -20,17 +23,23 @@ static void DECREF(PyObject *o) {
 	Py_DECREF(o);
 }
 
-static void XDECREF(PyObject *o) {
-	Py_XDECREF(o);
-}
-
 static void Tuple_SET_ITEM(PyObject *p, Py_ssize_t pos, PyObject *o) {
 	PyTuple_SET_ITEM(p, pos, o);
 }
 
-static PyObject *NoneRef() {
+static PyObject *None_INCREF() {
 	Py_INCREF(Py_None);
 	return Py_None;
+}
+
+static PyObject *False_INCREF() {
+	Py_INCREF(Py_False);
+	return Py_False;
+}
+
+static PyObject *True_INCREF() {
+	Py_INCREF(Py_True);
+	return Py_True;
 }
 
 static PyObject *Long_FromInt64(int64_t v) {
@@ -41,36 +50,56 @@ static PyObject *Long_FromUint64(uint64_t v) {
 	return PyLong_FromUnsignedLongLong(v);
 }
 
-static bool None_Check(PyObject *o) {
-	return o == Py_None;
-}
-
-static bool False_Check(PyObject *o) {
-	return o == Py_False;
-}
-
-static bool True_Check(PyObject *o) {
-	return o == Py_True;
-}
-
-static bool Int_Check(PyObject *o) {
-	return PyInt_Check(o);
-}
-
-static bool Float_Check(PyObject *o) {
-	return PyFloat_Check(o);
-}
-
-static bool Complex_Check(PyObject *o) {
-	return PyComplex_Check(o);
-}
-
-static bool String_Check(PyObject *o) {
-	return PyString_Check(o);
+static int getType(PyObject *o) {
+	if (o == Py_None) {
+		return 1;
+	}
+	if (o == Py_False) {
+		return 2;
+	}
+	if (o == Py_True) {
+		return 3;
+	}
+	if (PyString_Check(o)) {
+		return 4;
+	}
+	if (PyInt_Check(o)) {
+		return 5;
+	}
+	if (PyLong_Check(o)) {
+		return 6;
+	}
+	if (PyFloat_Check(o)) {
+		return 7;
+	}
+	if (PyComplex_Check(o)) {
+		return 8;
+	}
+	if (PySequence_Check(o)) {
+		return 9;
+	}
+	if (PyMapping_Check(o)) {
+		return 10;
+	}
+	return 999;
 }
 
 static PyObject *Mapping_Items(PyObject *o) {
 	return PyMapping_Items(o);
+}
+
+static PyObject *Object_CallObjectStealingArgs(PyObject *o, PyObject *args, int *resultType) {
+	PyObject *result = PyObject_CallObject(o, args);
+	Py_DECREF(args);
+	if (result) {
+		int t = getType(result);
+		*resultType = t;
+		if (t <= 3) {
+			Py_DECREF(result);
+			result = NULL;
+		}
+	}
+	return result;
 }
 
 */
@@ -88,8 +117,12 @@ type work struct {
 }
 
 var (
-	pyArgv *C.char
-	workQueue = make(chan *work)
+	pyArgv        *C.char
+	pyEmptyTuple  *C.PyObject
+	falseObject   *object
+	trueObject    *object
+	pyThreadState *C.PyThreadState
+	workQueue     = make(chan work)
 )
 
 func init() {
@@ -101,27 +134,26 @@ func executeLoop() {
 
 	C.PyEval_InitThreads()
 	C.Py_InitializeEx(0)
+	C.PyGILState_Ensure()
 	C.PySys_SetArgvEx(0, &pyArgv, 0)
 
-	gilState := C.PyGILState_Ensure()
-	defer C.PyGILState_Release(gilState)
+	pyEmptyTuple = C.PyTuple_New(0)
+	falseObject = &object{C.False_INCREF()}
+	trueObject = &object{C.True_INCREF()}
 
-	threadState := C.PyEval_SaveThread()
+	pyThreadState = C.PyEval_SaveThread()
 
-	for w := range workQueue {
-		executeWork(w, &threadState)
+	for {
+		executeWork(<-workQueue)
 	}
 }
 
-func executeWork(w *work, threadState **C.PyThreadState) {
+func executeWork(w work) {
+	C.PyEval_RestoreThread(pyThreadState)
+
 	defer func() {
 		w.r <- recover()
-	}()
-
-	C.PyEval_RestoreThread(*threadState)
-
-	defer func() {
-		*threadState = C.PyEval_SaveThread()
+		pyThreadState = C.PyEval_SaveThread()
 	}()
 
 	w.f()
@@ -129,14 +161,11 @@ func executeWork(w *work, threadState **C.PyThreadState) {
 
 // execute Python code.
 func execute(f func()) {
-	w := &work{
-		f: f,
-		r: make(chan interface{}),
-	}
+	r := make(chan interface{}, 1)
 
-	workQueue <- w
+	workQueue <- work{f, r}
 
-	if v := <-w.r; v != nil {
+	if v := <-r; v != nil {
 		panic(v)
 	}
 }
@@ -185,27 +214,38 @@ type object struct {
 	pyObject *C.PyObject
 }
 
+// newObject wraps a Python object.
+func newObject(pyObject *C.PyObject) (Object, error) {
+	return newObjectType(C.getType(pyObject), pyObject)
+}
+
+// newObjectType wraps a Python object, unless it is None.
+func newObjectType(pyType C.int, pyObject *C.PyObject) (o Object, err error) {
+	switch int(pyType) {
+	case 0:
+		err = getError()
+
+	case 1:
+		// nil
+
+	case 2:
+		o = falseObject
+
+	case 3:
+		o = trueObject
+
+	default:
+		o = &object{pyObject}
+		runtime.SetFinalizer(o, finalizeObject)
+	}
+
+	return
+}
+
 func finalizeObject(o *object) {
 	execute(func() {
 		C.DECREF(o.pyObject)
 	})
-}
-
-// newObject wraps a Python object.
-func newObject(pyObject *C.PyObject) Object {
-	o := &object{pyObject}
-	runtime.SetFinalizer(o, finalizeObject)
-	return o
-}
-
-// newObject wraps a Python object, unless it is NULL.
-func newObjectIfOk(pyObject *C.PyObject) (o Object, err error) {
-	if pyObject != nil {
-		o = newObject(pyObject)
-	} else {
-		err = getError()
-	}
-	return
 }
 
 // Import a Python module.
@@ -214,75 +254,160 @@ func Import(name string) (module Object, err error) {
 	defer C.free(unsafe.Pointer(cName))
 
 	execute(func() {
-		module, err = newObjectIfOk(C.PyImport_ImportModule(cName))
+		pyModule := C.PyImport_ImportModule(cName)
+		if pyModule == nil {
+			err = getError()
+			return
+		}
+
+		module, err = newObject(pyModule)
 	})
 	return
 }
 
 func (o *object) Attr(name string) (attr Object, err error) {
 	execute(func() {
-		attr, err = newObjectIfOk(getAttr(o.pyObject, name))
+		var pyAttr *C.PyObject
+
+		pyAttr, err = getAttr(o.pyObject, name)
+		if err != nil {
+			return
+		}
+
+		attr, err = newObject(pyAttr)
 	})
 	return
 }
 
 func (o *object) AttrValue(name string) (attr interface{}, err error) {
 	execute(func() {
-		attr, err = decodeIfOk(getAttr(o.pyObject, name))
+		var pyAttr *C.PyObject
+
+		pyAttr, err = getAttr(o.pyObject, name)
+		if err != nil {
+			return
+		}
+
+		defer C.DECREF(pyAttr)
+
+		attr, err = decode(pyAttr)
 	})
 	return
 }
 
 func (o *object) Length() (l int, err error) {
 	execute(func() {
-		if size := C.PySequence_Size(o.pyObject); size >= 0 {
-			l = int(size)
-		} else {
+		size := C.PySequence_Size(o.pyObject)
+		if size < 0 {
 			err = getError()
+			return
 		}
-		return
+
+		l = int(size)
 	})
 	return
 }
 
 func (o *object) Item(i int) (item Object, err error) {
 	execute(func() {
-		item, err = newObjectIfOk(C.PySequence_GetItem(o.pyObject, C.Py_ssize_t(i)))
+		pyItem := C.PySequence_GetItem(o.pyObject, C.Py_ssize_t(i))
+		if pyItem == nil {
+			err = getError()
+			return
+		}
+
+		item, err = newObject(pyItem)
 	})
 	return
 }
 
 func (o *object) ItemValue(i int) (item interface{}, err error) {
 	execute(func() {
-		item, err = decodeIfOk(C.PySequence_GetItem(o.pyObject, C.Py_ssize_t(i)))
+		pyItem := C.PySequence_GetItem(o.pyObject, C.Py_ssize_t(i))
+		if pyItem == nil {
+			err = getError()
+			return
+		}
+
+		defer C.DECREF(pyItem)
+
+		item, err = decode(pyItem)
 	})
 	return
 }
 
 func (o *object) Invoke(args ...interface{}) (result Object, err error) {
 	execute(func() {
-		result, err = newObjectIfOk(invoke(o.pyObject, args))
+		var (
+			pyType   C.int
+			pyResult *C.PyObject
+		)
+
+		pyType, pyResult, err = invoke(o.pyObject, args)
+		if err != nil {
+			return
+		}
+
+		result, err = newObjectType(pyType, pyResult)
 	})
 	return
 }
 
 func (o *object) InvokeValue(args ...interface{}) (result interface{}, err error) {
 	execute(func() {
-		result, err = decodeIfOk(invoke(o.pyObject, args))
+		var (
+			pyType   C.int
+			pyResult *C.PyObject
+		)
+
+		pyType, pyResult, err = invoke(o.pyObject, args)
+		if err != nil {
+			return
+		}
+
+		if pyResult != nil {
+			defer C.DECREF(pyResult)
+		}
+
+		result, err = decodeType(pyType, pyResult)
 	})
 	return
 }
 
 func (o *object) Call(name string, args ...interface{}) (result Object, err error) {
 	execute(func() {
-		result, err = newObjectIfOk(call(o.pyObject, name, args))
+		var (
+			pyType   C.int
+			pyResult *C.PyObject
+		)
+
+		pyType, pyResult, err = call(o.pyObject, name, args)
+		if err != nil {
+			return
+		}
+
+		result, err = newObjectType(pyType, pyResult)
 	})
 	return
 }
 
 func (o *object) CallValue(name string, args ...interface{}) (result interface{}, err error) {
 	execute(func() {
-		result, err = decodeIfOk(call(o.pyObject, name, args))
+		var (
+			pyType   C.int
+			pyResult *C.PyObject
+		)
+
+		pyType, pyResult, err = call(o.pyObject, name, args)
+		if err != nil {
+			return
+		}
+
+		if pyResult != nil {
+			defer C.DECREF(pyResult)
+		}
+
+		result, err = decodeType(pyType, pyResult)
 	})
 	return
 }
@@ -301,28 +426,34 @@ func (o *object) String() (s string) {
 	return
 }
 
-func getAttr(pyObject *C.PyObject, name string) *C.PyObject {
+func getAttr(pyObject *C.PyObject, name string) (pyResult *C.PyObject, err error) {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 
-	return C.PyObject_GetAttrString(pyObject, cName)
+	if pyResult = C.PyObject_GetAttrString(pyObject, cName); pyResult == nil {
+		err = getError()
+	}
+	return
 }
 
-func invoke(pyObject *C.PyObject, args []interface{}) (pyResult *C.PyObject) {
+func invoke(pyObject *C.PyObject, args []interface{}) (pyType C.int, pyResult *C.PyObject, err error) {
 	pyArgs, err := encodeTuple(args)
 	if err != nil {
 		return
 	}
-	defer C.DECREF(pyArgs)
 
-	return C.PyObject_CallObject(pyObject, pyArgs)
+	if pyResult = C.Object_CallObjectStealingArgs(pyObject, pyArgs, &pyType); pyType == 0 {
+		err = getError()
+	}
+	return
 }
 
-func call(pyObject *C.PyObject, name string, args []interface{}) (pyResult *C.PyObject) {
-	pyMember := getAttr(pyObject, name)
-	if pyMember == nil {
+func call(pyObject *C.PyObject, name string, args []interface{}) (pyType C.int, pyResult *C.PyObject, err error) {
+	pyMember, err := getAttr(pyObject, name)
+	if err != nil {
 		return
 	}
+
 	defer C.DECREF(pyMember)
 
 	return invoke(pyMember, args)
@@ -345,7 +476,7 @@ func stringify(pyObject *C.PyObject) (s string) {
 // object.
 func encode(x interface{}) (pyValue *C.PyObject, err error) {
 	if x == nil {
-		pyValue = C.NoneRef()
+		pyValue = C.None_INCREF()
 		return
 	}
 
@@ -389,9 +520,7 @@ func encode(x interface{}) (pyValue *C.PyObject, err error) {
 		pyValue = C.Long_FromInt64(C.int64_t(value))
 
 	case string:
-		cString := C.CString(value)
-		defer C.free(unsafe.Pointer(cString))
-		pyValue = C.PyString_FromString(cString)
+		pyValue = C.String_FromGoStringPtr(unsafe.Pointer(&value))
 
 	case uint:
 		pyValue = C.Long_FromUint64(C.uint64_t(value))
@@ -415,8 +544,8 @@ func encode(x interface{}) (pyValue *C.PyObject, err error) {
 		return encodeDict(value)
 
 	case *object:
-		C.INCREF(value.pyObject)
 		pyValue = value.pyObject
+		C.INCREF(pyValue)
 
 	default:
 		err = fmt.Errorf("unable to translate %t to python", x)
@@ -430,84 +559,126 @@ func encode(x interface{}) (pyValue *C.PyObject, err error) {
 }
 
 // encodeTuple translates a Go array to a Python object.
-func encodeTuple(array []interface{}) (*C.PyObject, error) {
-	pyTuple := C.PyTuple_New(C.Py_ssize_t(len(array)))
+func encodeTuple(array []interface{}) (pyTuple *C.PyObject, err error) {
+	if len(array) == 0 {
+		pyTuple = pyEmptyTuple
+		C.INCREF(pyTuple)
+	} else {
+		pyTuple = C.PyTuple_New(C.Py_ssize_t(len(array)))
 
-	for i, item := range array {
-		pyItem, err := encode(item)
-		if err != nil {
-			C.DECREF(pyTuple)
-			return nil, err
+		var ok bool
+
+		defer func() {
+			if !ok {
+				C.DECREF(pyTuple)
+				pyTuple = nil
+			}
+		}()
+
+		for i, item := range array {
+			var pyItem *C.PyObject
+
+			if pyItem, err = encode(item); err != nil {
+				return
+			}
+
+			C.Tuple_SET_ITEM(pyTuple, C.Py_ssize_t(i), pyItem)
 		}
 
-		C.Tuple_SET_ITEM(pyTuple, C.Py_ssize_t(i), pyItem)
+		ok = true
 	}
 
-	return pyTuple, nil
+	return
 }
 
 // encodeDict translates a Go map to a Python object.
-func encodeDict(m map[interface{}]interface{}) (*C.PyObject, error) {
-	pyDict := C.PyDict_New()
+func encodeDict(m map[interface{}]interface{}) (pyDict *C.PyObject, err error) {
+	pyDict = C.PyDict_New()
+
+	var ok bool
+
+	defer func() {
+		if !ok {
+			C.DECREF(pyDict)
+			pyDict = nil
+		}
+	}()
 
 	for key, value := range m {
-		pyKey, err := encode(key)
-		if err != nil {
-			C.DECREF(pyDict)
-			return nil, err
+		if err = encodeDictItem(pyDict, key, value); err != nil {
+			return
 		}
-
-		pyValue, err := encode(value)
-		if err != nil {
-			C.DECREF(pyKey)
-			C.DECREF(pyDict)
-			return nil, err
-		}
-
-		if C.PyDict_SetItem(pyDict, pyKey, pyValue) < 0 {
-			C.DECREF(pyValue)
-			C.DECREF(pyKey)
-			C.DECREF(pyDict)
-			return nil, getError()
-		}
-
-		C.DECREF(pyValue)
-		C.DECREF(pyKey)
 	}
 
-	return pyDict, nil
+	ok = true
+
+	return
 }
 
-// decode translates a Python object to a Go value.
-func decode(pyValue *C.PyObject) (value interface{}, err error) {
-	if C.None_Check(pyValue) {
-		value = nil
+func encodeDictItem(pyDict *C.PyObject, key, value interface{}) (err error) {
+	pyKey, err := encode(key)
+	if err != nil {
+		return
+	}
 
-	} else if C.False_Check(pyValue) {
+	defer C.DECREF(pyKey)
+
+	pyValue, err := encode(value)
+	if err != nil {
+		return
+	}
+
+	defer C.DECREF(pyValue)
+
+	if C.PyDict_SetItem(pyDict, pyKey, pyValue) < 0 {
+		err = getError()
+	}
+	return
+}
+
+// decode translates a Python object to a Go value.  It must be non-NULL.
+func decode(pyValue *C.PyObject) (interface{}, error) {
+	return decodeType(C.getType(pyValue), pyValue)
+}
+
+// decodeType translates a Python object to a Go value.  Its type must be
+// non-zero.
+func decodeType(pyType C.int, pyValue *C.PyObject) (value interface{}, err error) {
+	switch int(pyType) {
+	case 0:
+		err = getError()
+
+	case 1:
+		// nil
+
+	case 2:
 		value = false
 
-	} else if C.True_Check(pyValue) {
+	case 3:
 		value = true
 
-	} else if C.Int_Check(pyValue) {
-		value = int(C.PyInt_AsLong(pyValue))
-
-	} else if C.Float_Check(pyValue) {
-		value = float64(C.PyFloat_AsDouble(pyValue))
-
-	} else if C.Complex_Check(pyValue) {
-		value = complex(C.PyComplex_RealAsDouble(pyValue), C.PyComplex_ImagAsDouble(pyValue))
-
-	} else if C.String_Check(pyValue) {
+	case 4:
 		value = C.GoString(C.PyString_AsString(pyValue))
 
-	} else if C.PySequence_Check(pyValue) != 0 {
+	case 5:
+		value = int(C.PyInt_AsLong(pyValue))
+
+	case 6:
+		panic("Python long type decoding not implemented")
+
+	case 7:
+		value = float64(C.PyFloat_AsDouble(pyValue))
+
+	case 8:
+		value = complex(C.PyComplex_RealAsDouble(pyValue), C.PyComplex_ImagAsDouble(pyValue))
+
+	case 9:
 		return decodeSequence(pyValue)
 
-	} else if C.PyMapping_Check(pyValue) != 0 {
+	case 10:
 		return decodeMapping(pyValue)
 
-	} else {
+	default:
 		err = fmt.Errorf("unable to translate %s from python", stringify(C.PyObject_Type(pyValue)))
 		return
 	}
@@ -515,46 +686,38 @@ func decode(pyValue *C.PyObject) (value interface{}, err error) {
 	return
 }
 
-// decodeIfOk translates a Python object to a Go value, unless it is NULL.  The
-// reference is stolen.
-func decodeIfOk(pyObject *C.PyObject) (interface{}, error) {
-	if pyObject != nil {
-		defer C.DECREF(pyObject)
-		return decode(pyObject)
-	} else {
-		return nil, getError()
-	}
-}
-
 // decodeSequence translates a Python object to a Go array.
-func decodeSequence(pySequence *C.PyObject) ([]interface{}, error) {
+func decodeSequence(pySequence *C.PyObject) (array []interface{}, err error) {
 	length := int(C.PySequence_Size(pySequence))
-	array := make([]interface{}, length)
+	array = make([]interface{}, length)
 
 	for i := 0; i < length; i++ {
 		pyValue := C.PySequence_GetItem(pySequence, C.Py_ssize_t(i))
 		if pyValue == nil {
-			return nil, getError()
+			err = getError()
+			return
 		}
 
-		value, err := decode(pyValue)
-		if err != nil {
-			return nil, err
+		var value interface{}
+
+		if value, err = decode(pyValue); err != nil {
+			return
 		}
 
 		array[i] = value
 	}
 
-	return array, nil
+	return
 }
 
 // decodeMapping translates a Python object to a Go map.
-func decodeMapping(pyMapping *C.PyObject) (map[interface{}]interface{}, error) {
-	mapping := make(map[interface{}]interface{})
+func decodeMapping(pyMapping *C.PyObject) (mapping map[interface{}]interface{}, err error) {
+	mapping = make(map[interface{}]interface{})
 
 	pyItems := C.Mapping_Items(pyMapping)
 	if pyItems == nil {
-		return nil, getError()
+		err = getError()
+		return
 	}
 
 	length := int(C.PyList_Size(pyItems))
@@ -562,20 +725,23 @@ func decodeMapping(pyMapping *C.PyObject) (map[interface{}]interface{}, error) {
 	for i := 0; i < length; i++ {
 		pyPair := C.PyList_GetItem(pyItems, C.Py_ssize_t(i))
 
-		key, err := decode(C.PyTuple_GetItem(pyPair, 0))
-		if err != nil {
-			return nil, err
+		var (
+			key   interface{}
+			value interface{}
+		)
+
+		if key, err = decode(C.PyTuple_GetItem(pyPair, 0)); err != nil {
+			return
 		}
 
-		value, err := decode(C.PyTuple_GetItem(pyPair, 1))
-		if err != nil {
-			return nil, err
+		if value, err = decode(C.PyTuple_GetItem(pyPair, 1)); err != nil {
+			return
 		}
 
 		mapping[key] = value
 	}
 
-	return mapping, nil
+	return
 }
 
 // getError translates the current Python exception to a Go error, and clears
@@ -591,7 +757,10 @@ func getError() error {
 
 	defer C.DECREF(pyType)
 	defer C.DECREF(pyValue)
-	defer C.XDECREF(pyTrace)
+
+	if pyTrace != nil {
+		defer C.DECREF(pyTrace)
+	}
 
 	C.PyErr_Clear()
 
