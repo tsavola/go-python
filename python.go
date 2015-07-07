@@ -187,6 +187,12 @@ type Object interface {
 	// ItemValue combines Item and Value methods.
 	ItemValue(index int) (interface{}, error)
 
+	// Get an element of a dict object.
+	Get(key interface{}) (o Object, found bool, err error)
+
+	// GetValue combines Get and Value methods.
+	GetValue(key interface{}) (v interface{}, found bool, err error)
+
 	// Invoke a callable object.
 	Invoke(args ...interface{}) (Object, error)
 
@@ -335,6 +341,46 @@ func (o *object) ItemValue(i int) (item interface{}, err error) {
 		defer C.DECREF(pyItem)
 
 		item, err = decode(pyItem)
+	})
+	return
+}
+
+func (o *object) Get(key interface{}) (value Object, found bool, err error) {
+	execute(func() {
+		var pyKey *C.PyObject
+
+		if pyKey, err = encode(key); err != nil {
+			return
+		}
+		defer C.DECREF(pyKey)
+
+		pyValue := C.PyDict_GetItem(o.pyObject, pyKey)
+		if pyValue == nil {
+			return
+		}
+
+		value = newObject(pyValue)
+		found = true
+	})
+	return
+}
+
+func (o *object) GetValue(key interface{}) (value interface{}, found bool, err error) {
+	execute(func() {
+		var pyKey *C.PyObject
+
+		if pyKey, err = encode(key); err != nil {
+			return
+		}
+		defer C.DECREF(pyKey)
+
+		pyValue := C.PyDict_GetItem(o.pyObject, pyKey)
+		if pyValue == nil {
+			return
+		}
+
+		value, err = decode(pyValue)
+		found = (err == nil)
 	})
 	return
 }

@@ -147,3 +147,38 @@ func TestLong(t *testing.T) {
 
 	t.Log(iface.(uint64))
 }
+
+func TestDict(t *testing.T) {
+	module, err := Import("sys")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dict, err := module.Attr("__dict__")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	value, found, err := dict.Get("nothing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value != nil {
+		t.Fail()
+	}
+	if found {
+		t.Fail()
+	}
+
+	value, found, err = dict.Get("version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value == nil {
+		t.Fail()
+	}
+	if !found {
+		t.Fail()
+	}
+	t.Log(value)
+}
