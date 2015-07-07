@@ -215,8 +215,9 @@ type object struct {
 }
 
 // newObject wraps a Python object.
-func newObject(pyObject *C.PyObject) (Object, error) {
-	return newObjectType(C.getType(pyObject), pyObject)
+func newObject(pyObject *C.PyObject) (o Object) {
+	o, _ = newObjectType(C.getType(pyObject), pyObject)
+	return
 }
 
 // newObjectType wraps a Python object, unless it is None.
@@ -236,6 +237,7 @@ func newObjectType(pyType C.int, pyObject *C.PyObject) (o Object, err error) {
 
 	default:
 		o = &object{pyObject}
+		C.INCREF(pyObject)
 		runtime.SetFinalizer(o, finalizeObject)
 	}
 
@@ -259,8 +261,9 @@ func Import(name string) (module Object, err error) {
 			err = getError()
 			return
 		}
+		defer C.DECREF(pyModule)
 
-		module, err = newObject(pyModule)
+		module = newObject(pyModule)
 	})
 	return
 }
@@ -273,8 +276,9 @@ func (o *object) Attr(name string) (attr Object, err error) {
 		if err != nil {
 			return
 		}
+		defer C.DECREF(pyAttr)
 
-		attr, err = newObject(pyAttr)
+		attr = newObject(pyAttr)
 	})
 	return
 }
@@ -287,7 +291,6 @@ func (o *object) AttrValue(name string) (attr interface{}, err error) {
 		if err != nil {
 			return
 		}
-
 		defer C.DECREF(pyAttr)
 
 		attr, err = decode(pyAttr)
@@ -315,8 +318,9 @@ func (o *object) Item(i int) (item Object, err error) {
 			err = getError()
 			return
 		}
+		defer C.DECREF(pyItem)
 
-		item, err = newObject(pyItem)
+		item = newObject(pyItem)
 	})
 	return
 }
@@ -328,7 +332,6 @@ func (o *object) ItemValue(i int) (item interface{}, err error) {
 			err = getError()
 			return
 		}
-
 		defer C.DECREF(pyItem)
 
 		item, err = decode(pyItem)
@@ -347,6 +350,7 @@ func (o *object) Invoke(args ...interface{}) (result Object, err error) {
 		if err != nil {
 			return
 		}
+		defer xDECREF(pyResult)
 
 		result, err = newObjectType(pyType, pyResult)
 	})
@@ -364,10 +368,7 @@ func (o *object) InvokeValue(args ...interface{}) (result interface{}, err error
 		if err != nil {
 			return
 		}
-
-		if pyResult != nil {
-			defer C.DECREF(pyResult)
-		}
+		defer xDECREF(pyResult)
 
 		result, err = decodeType(pyType, pyResult)
 	})
@@ -385,6 +386,7 @@ func (o *object) Call(name string, args ...interface{}) (result Object, err erro
 		if err != nil {
 			return
 		}
+		defer xDECREF(pyResult)
 
 		result, err = newObjectType(pyType, pyResult)
 	})
@@ -402,10 +404,7 @@ func (o *object) CallValue(name string, args ...interface{}) (result interface{}
 		if err != nil {
 			return
 		}
-
-		if pyResult != nil {
-			defer C.DECREF(pyResult)
-		}
+		defer xDECREF(pyResult)
 
 		result, err = decodeType(pyType, pyResult)
 	})
@@ -453,7 +452,6 @@ func call(pyObject *C.PyObject, name string, args []interface{}) (pyType C.int, 
 	if err != nil {
 		return
 	}
-
 	defer C.DECREF(pyMember)
 
 	return invoke(pyMember, args)
@@ -620,14 +618,12 @@ func encodeDictItem(pyDict *C.PyObject, key, value interface{}) (err error) {
 	if err != nil {
 		return
 	}
-
 	defer C.DECREF(pyKey)
 
 	pyValue, err := encode(value)
 	if err != nil {
 		return
 	}
-
 	defer C.DECREF(pyValue)
 
 	if C.PyDict_SetItem(pyDict, pyKey, pyValue) < 0 {
@@ -775,12 +771,15 @@ func getError() error {
 
 	defer C.DECREF(pyType)
 	defer C.DECREF(pyValue)
-
-	if pyTrace != nil {
-		defer C.DECREF(pyTrace)
-	}
+	defer xDECREF(pyTrace)
 
 	C.PyErr_Clear()
 
 	return fmt.Errorf("Python: %s", stringify(pyValue))
+}
+
+func xDECREF(pyObject *C.PyObject) {
+	if pyObject != nil {
+		C.DECREF(pyObject)
+	}
 }
