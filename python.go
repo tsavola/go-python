@@ -108,64 +108,104 @@ import "C"
 import (
 	"fmt"
 	"runtime"
+	"sync"
 	"unsafe"
 )
 
-type work struct {
-	f func()
-	r chan interface{}
-}
-
 var (
-	pyArgv        *C.char
-	pyEmptyTuple  *C.PyObject
-	falseObject   *object
-	trueObject    *object
-	pyThreadState *C.PyThreadState
-	workQueue     = make(chan work)
+	defaultThread *Thread
+
+	initLock     sync.Mutex
+	initialized  bool
+	pyArgv       *C.char
+	pyEmptyTuple *C.PyObject
+	falseObject  *object
+	trueObject   *object
 )
 
 func init() {
-	go executeLoop()
+	defaultThread = NewThread()
 }
 
-func executeLoop() {
+func threadInit() (defaultThreadState *C.PyThreadState) {
+	initLock.Lock()
+	defer initLock.Unlock()
+
+	if !initialized {
+		C.Py_InitializeEx(0)
+		C.PyEval_InitThreads()
+		C.PySys_SetArgvEx(0, &pyArgv, 0)
+
+		pyEmptyTuple = C.PyTuple_New(0)
+		falseObject = &object{C.False_INCREF()}
+		trueObject = &object{C.True_INCREF()}
+
+		defaultThreadState = C.PyEval_SaveThread()
+
+		initialized = true
+	}
+
+	return
+}
+
+// Thread for Python evaluation.
+type Thread struct {
+	queue chan func()
+}
+
+// NewThread creates an alternative thread to be passed to the Import function
+// and Object methods.
+func NewThread() (t *Thread) {
+	t = &Thread{
+		queue: make(chan func(), 1),
+	}
+	go t.loop()
+	return
+}
+
+// Close terminates the thread.
+func (t *Thread) Close() (err error) {
+	close(t.queue)
+	return
+}
+
+func (t *Thread) loop() {
 	runtime.LockOSThread()
 
-	C.PyEval_InitThreads()
-	C.Py_InitializeEx(0)
-	C.PyGILState_Ensure()
-	C.PySys_SetArgvEx(0, &pyArgv, 0)
-
-	pyEmptyTuple = C.PyTuple_New(0)
-	falseObject = &object{C.False_INCREF()}
-	trueObject = &object{C.True_INCREF()}
-
-	pyThreadState = C.PyEval_SaveThread()
-
-	for {
-		executeWork(<-workQueue)
+	threadState := threadInit()
+	if threadState == nil {
+		gilState := C.PyGILState_Ensure()
+		oldThreadState := C.PyGILState_GetThisThreadState()
+		threadState = C.PyThreadState_New(oldThreadState.interp)
+		C.PyGILState_Release(gilState)
 	}
-}
 
-func executeWork(w work) {
-	C.PyEval_RestoreThread(pyThreadState)
+	for f := range t.queue {
+		C.PyEval_RestoreThread(threadState)
+		f()
+		threadState = C.PyEval_SaveThread()
+	}
 
-	defer func() {
-		w.r <- recover()
-		pyThreadState = C.PyEval_SaveThread()
-	}()
-
-	w.f()
+	gilState := C.PyGILState_Ensure()
+	C.PyThreadState_Clear(threadState)
+	C.PyThreadState_Delete(threadState)
+	C.PyGILState_Release(gilState)
 }
 
 // execute Python code.
-func execute(f func()) {
-	r := make(chan interface{}, 1)
+func (t *Thread) execute(f func()) {
+	if t == nil {
+		t = defaultThread
+	}
 
-	workQueue <- work{f, r}
+	c := make(chan interface{}, 1)
 
-	if v := <-r; v != nil {
+	t.queue <- func() {
+		defer func() { c <- recover() }()
+		f()
+	}
+
+	if v := <-c; v != nil {
 		panic(v)
 	}
 }
@@ -173,43 +213,43 @@ func execute(f func()) {
 // Object wraps a Python object.
 type Object interface {
 	// Attr gets an attribute of an object.
-	Attr(name string) (Object, error)
+	Attr(t *Thread, name string) (Object, error)
 
 	// AttrValue combines Attr and Value methods.
-	AttrValue(name string) (interface{}, error)
+	AttrValue(t *Thread, name string) (interface{}, error)
 
 	// Length of a sequence object.
-	Length() (int, error)
+	Length(t *Thread) (int, error)
 
 	// Item gets an element of a sequence object.
-	Item(index int) (Object, error)
+	Item(t *Thread, index int) (Object, error)
 
 	// ItemValue combines Item and Value methods.
-	ItemValue(index int) (interface{}, error)
+	ItemValue(t *Thread, index int) (interface{}, error)
 
 	// Get an element of a dict object.
-	Get(key interface{}) (o Object, found bool, err error)
+	Get(t *Thread, key interface{}) (o Object, found bool, err error)
 
 	// GetValue combines Get and Value methods.
-	GetValue(key interface{}) (v interface{}, found bool, err error)
+	GetValue(t *Thread, key interface{}) (v interface{}, found bool, err error)
 
 	// Invoke a callable object.
-	Invoke(args ...interface{}) (Object, error)
+	Invoke(t *Thread, args ...interface{}) (Object, error)
 
 	// InvokeValue combines Invoke and Value methods.
-	InvokeValue(args ...interface{}) (interface{}, error)
+	InvokeValue(t *Thread, args ...interface{}) (interface{}, error)
 
 	// Call a member of an object.
-	Call(name string, args ...interface{}) (Object, error)
+	Call(t *Thread, name string, args ...interface{}) (Object, error)
 
 	// CallValue combines Call and Value methods.
-	CallValue(name string, args ...interface{}) (interface{}, error)
+	CallValue(t *Thread, name string, args ...interface{}) (interface{}, error)
 
 	// Value translates a Python object to a Go type (if possible).
-	Value() (interface{}, error)
+	Value(t *Thread) (interface{}, error)
 
-	// String representation of an object.  The result is an arbitrary value on
-	// error.
+	// String representation of an object.  Always uses the default thread.
+	// The result is an arbitrary value on error.
 	String() string
 }
 
@@ -252,17 +292,17 @@ func newObjectType(pyType C.int, pyObject *C.PyObject) (o Object, err error) {
 }
 
 func finalizeObject(o *object) {
-	execute(func() {
+	defaultThread.execute(func() {
 		C.DECREF(o.pyObject)
 	})
 }
 
 // Import a Python module.
-func Import(name string) (module Object, err error) {
+func Import(t *Thread, name string) (module Object, err error) {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 
-	execute(func() {
+	t.execute(func() {
 		pyModule := C.PyImport_ImportModule(cName)
 		if pyModule == nil {
 			err = getError()
@@ -275,8 +315,8 @@ func Import(name string) (module Object, err error) {
 	return
 }
 
-func (o *object) Attr(name string) (attr Object, err error) {
-	execute(func() {
+func (o *object) Attr(t *Thread, name string) (attr Object, err error) {
+	t.execute(func() {
 		var pyAttr *C.PyObject
 
 		pyAttr, err = getAttr(o.pyObject, name)
@@ -290,8 +330,8 @@ func (o *object) Attr(name string) (attr Object, err error) {
 	return
 }
 
-func (o *object) AttrValue(name string) (attr interface{}, err error) {
-	execute(func() {
+func (o *object) AttrValue(t *Thread, name string) (attr interface{}, err error) {
+	t.execute(func() {
 		var pyAttr *C.PyObject
 
 		pyAttr, err = getAttr(o.pyObject, name)
@@ -305,8 +345,8 @@ func (o *object) AttrValue(name string) (attr interface{}, err error) {
 	return
 }
 
-func (o *object) Length() (l int, err error) {
-	execute(func() {
+func (o *object) Length(t *Thread) (l int, err error) {
+	t.execute(func() {
 		size := C.PySequence_Size(o.pyObject)
 		if size < 0 {
 			err = getError()
@@ -318,8 +358,8 @@ func (o *object) Length() (l int, err error) {
 	return
 }
 
-func (o *object) Item(i int) (item Object, err error) {
-	execute(func() {
+func (o *object) Item(t *Thread, i int) (item Object, err error) {
+	t.execute(func() {
 		pyItem := C.PySequence_GetItem(o.pyObject, C.Py_ssize_t(i))
 		if pyItem == nil {
 			err = getError()
@@ -332,8 +372,8 @@ func (o *object) Item(i int) (item Object, err error) {
 	return
 }
 
-func (o *object) ItemValue(i int) (item interface{}, err error) {
-	execute(func() {
+func (o *object) ItemValue(t *Thread, i int) (item interface{}, err error) {
+	t.execute(func() {
 		pyItem := C.PySequence_GetItem(o.pyObject, C.Py_ssize_t(i))
 		if pyItem == nil {
 			err = getError()
@@ -346,8 +386,8 @@ func (o *object) ItemValue(i int) (item interface{}, err error) {
 	return
 }
 
-func (o *object) Get(key interface{}) (value Object, found bool, err error) {
-	execute(func() {
+func (o *object) Get(t *Thread, key interface{}) (value Object, found bool, err error) {
+	t.execute(func() {
 		var pyKey *C.PyObject
 
 		if pyKey, err = encode(key); err != nil {
@@ -366,8 +406,8 @@ func (o *object) Get(key interface{}) (value Object, found bool, err error) {
 	return
 }
 
-func (o *object) GetValue(key interface{}) (value interface{}, found bool, err error) {
-	execute(func() {
+func (o *object) GetValue(t *Thread, key interface{}) (value interface{}, found bool, err error) {
+	t.execute(func() {
 		var pyKey *C.PyObject
 
 		if pyKey, err = encode(key); err != nil {
@@ -386,8 +426,8 @@ func (o *object) GetValue(key interface{}) (value interface{}, found bool, err e
 	return
 }
 
-func (o *object) Invoke(args ...interface{}) (result Object, err error) {
-	execute(func() {
+func (o *object) Invoke(t *Thread, args ...interface{}) (result Object, err error) {
+	t.execute(func() {
 		var (
 			pyType   C.int
 			pyResult *C.PyObject
@@ -403,8 +443,8 @@ func (o *object) Invoke(args ...interface{}) (result Object, err error) {
 	return
 }
 
-func (o *object) InvokeValue(args ...interface{}) (result interface{}, err error) {
-	execute(func() {
+func (o *object) InvokeValue(t *Thread, args ...interface{}) (result interface{}, err error) {
+	t.execute(func() {
 		var (
 			pyType   C.int
 			pyResult *C.PyObject
@@ -421,8 +461,8 @@ func (o *object) InvokeValue(args ...interface{}) (result interface{}, err error
 	return
 }
 
-func (o *object) Call(name string, args ...interface{}) (result Object, err error) {
-	execute(func() {
+func (o *object) Call(t *Thread, name string, args ...interface{}) (result Object, err error) {
+	t.execute(func() {
 		var (
 			pyType   C.int
 			pyResult *C.PyObject
@@ -438,8 +478,8 @@ func (o *object) Call(name string, args ...interface{}) (result Object, err erro
 	return
 }
 
-func (o *object) CallValue(name string, args ...interface{}) (result interface{}, err error) {
-	execute(func() {
+func (o *object) CallValue(t *Thread, name string, args ...interface{}) (result interface{}, err error) {
+	t.execute(func() {
 		var (
 			pyType   C.int
 			pyResult *C.PyObject
@@ -456,15 +496,15 @@ func (o *object) CallValue(name string, args ...interface{}) (result interface{}
 	return
 }
 
-func (o *object) Value() (v interface{}, err error) {
-	execute(func() {
+func (o *object) Value(t *Thread) (v interface{}, err error) {
+	t.execute(func() {
 		v, err = decode(o.pyObject)
 	})
 	return
 }
 
 func (o *object) String() (s string) {
-	execute(func() {
+	defaultThread.execute(func() {
 		s = stringify(o.pyObject)
 	})
 	return

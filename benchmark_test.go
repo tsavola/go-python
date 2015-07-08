@@ -24,21 +24,21 @@ func init() {
 		panic(err)
 	}
 
-	pyModule, err = python.Import("benchmark_test")
+	pyModule, err = python.Import(nil, "benchmark_test")
 	if err != nil {
 		panic(err)
 	}
 }
 
 func BenchmarkPythonOnly(b *testing.B) {
-	f, err := pyModule.Call("benchmark_python_only_factory", b.N, foo, bar, baz)
+	f, err := pyModule.Call(nil, "benchmark_python_only_factory", b.N, foo, bar, baz)
 	if err != nil {
 		b.Fatal(err)
 	}
 
 	b.StartTimer()
 
-	if _, err = f.Invoke(); err != nil {
+	if _, err = f.Invoke(nil); err != nil {
 		b.Fatal(err)
 	}
 
@@ -46,7 +46,7 @@ func BenchmarkPythonOnly(b *testing.B) {
 }
 
 func BenchmarkGoPython(b *testing.B) {
-	f, err := pyModule.Attr("function")
+	f, err := pyModule.Attr(nil, "function")
 	if err != nil {
 		panic(err)
 	}
@@ -54,7 +54,7 @@ func BenchmarkGoPython(b *testing.B) {
 	b.StartTimer()
 
 	for i := 0; i < b.N; i++ {
-		if _, err := f.Invoke(foo, bar, baz); err != nil {
+		if _, err := f.Invoke(nil, foo, bar, baz); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -75,7 +75,7 @@ func BenchmarkJSON(b *testing.B) {
 
 	resultData := []byte("true")
 
-	f, err := pyModule.Call("benchmark_json_factory", b.N, foo, bar, baz)
+	f, err := pyModule.Call(nil, "benchmark_json_factory", b.N, foo, bar, baz)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func BenchmarkJSON(b *testing.B) {
 		}
 	}
 
-	if _, err = f.Invoke(); err != nil {
+	if _, err = f.Invoke(nil); err != nil {
 		b.Fatal(err)
 	}
 
