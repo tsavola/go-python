@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"."
+	"github.com/tsavola/go-python"
 )
 
 func Test(t *testing.T) {

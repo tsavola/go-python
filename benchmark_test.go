@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"."
+	"github.com/tsavola/go-python"
 )
 
 const (
@@ -63,7 +63,7 @@ func BenchmarkGoPython(b *testing.B) {
 }
 
 func BenchmarkJSON(b *testing.B) {
-	args := struct{
+	args := struct {
 		Foo string
 		Bar string
 		Baz int
