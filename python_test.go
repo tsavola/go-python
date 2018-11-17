@@ -148,7 +148,34 @@ func TestLong(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Log(iface.(uint64))
+	t.Log(iface)
+
+	if iface.(uint64) != 0xfffffffffffffffe {
+		t.Fail()
+	}
+}
+
+func TestStringArg(t *testing.T) {
+	module, err := python.Import(nil, "__builtin__")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pyInt, err := module.Call(nil, "len", "striiiiiiing")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	iface, err := pyInt.Value(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Log(iface)
+
+	if iface.(int) != 12 {
+		t.Fail()
+	}
 }
 
 func TestDict(t *testing.T) {
