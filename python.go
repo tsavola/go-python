@@ -13,8 +13,6 @@ package python
 #include <stdint.h>
 #include <stdlib.h>
 
-PyObject *String_FromGoStringPtr(void *);
-
 static void INCREF(PyObject *o) {
 	Py_INCREF(o);
 }
@@ -602,7 +600,7 @@ func encode(x interface{}) (pyValue *C.PyObject, err error) {
 		pyValue = C.Long_FromInt64(C.int64_t(value))
 
 	case string:
-		pyValue = C.String_FromGoStringPtr(unsafe.Pointer(&value))
+		pyValue = C.PyString_FromStringAndSize(C.CString(value), C.long(len(value)))
 
 	case uint:
 		pyValue = C.Long_FromUint64(C.uint64_t(value))
